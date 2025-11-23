@@ -15,7 +15,14 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     [Tooltip("How often to check for updates (in seconds). Minimum: 60s")]
     public float refreshInterval = 300f;
 
-    [Header("--- Customization ---")]
+    [Header("--- Visual Customization ---")]
+    public string boardTitle = "Our Supporters";
+    public Color headerColor = new Color(0.5f, 0f, 0.5f, 1f); // Purple default
+    public Color textColor = Color.white;
+    [Range(0f, 1f)]
+    public float backgroundOpacity = 0.8f;
+
+    [Header("--- Layout Settings ---")]
     [Tooltip("How many names to show before making a new page")]
     public int namesPerPage = 20;
     [Tooltip("How many seconds to stay on a page before scrolling")]
@@ -28,8 +35,10 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     public TextMeshProUGUI contentText;
     [Tooltip("Small footer for status/page numbers")]
     public TextMeshProUGUI statusText;
-    [Tooltip("Optional: Header text to show total count")]
+    [Tooltip("Header text component")]
     public TextMeshProUGUI headerText;
+    [Tooltip("Background Image component")]
+    public Image backgroundImage;
 
     // --- Internal Optimization State ---
     // We pre-format pages into strings so we don't generate garbage during Update/Scroll
@@ -50,6 +59,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     {
         // 1. Robust Initialization & Auto-Discovery
         ValidateConfiguration();
+        ApplyVisuals();
         
         // 2. Initial Load
         if (Utilities.IsValid(dataUrl) && !string.IsNullOrEmpty(dataUrl.Url))
@@ -99,6 +109,29 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         {
             // specific interaction behavior if empty: try forcing a reload
             LoadData();
+        }
+    }
+
+    // --- Visuals ---
+    public void ApplyVisuals()
+    {
+        if (headerText != null)
+        {
+            headerText.color = headerColor;
+            // Only set title if we haven't loaded data yet (which appends count)
+            if (!_hasData) headerText.text = boardTitle;
+        }
+
+        if (contentText != null)
+        {
+            contentText.color = textColor;
+        }
+
+        if (backgroundImage != null)
+        {
+            Color bg = backgroundImage.color;
+            bg.a = backgroundOpacity;
+            backgroundImage.color = bg;
         }
     }
 
@@ -160,7 +193,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         if (headerText != null && root.ContainsKey("total_supporters"))
         {
             double count = root["total_supporters"].Number; // VRCJson numbers are doubles
-            headerText.text = $"Supporters ({count})";
+            headerText.text = $"{boardTitle} ({count})";
         }
 
         // 2. Parse Supporters List
@@ -288,6 +321,8 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     {
         // Try to find components if not assigned (Quality of Life)
         if (contentText == null) contentText = GetComponentInChildren<TextMeshProUGUI>();
+        if (headerText == null && transform.Find("Header") != null) headerText = transform.Find("Header").GetComponent<TextMeshProUGUI>();
+        if (backgroundImage == null) backgroundImage = GetComponentInChildren<Image>();
         
         // If still null, we can't do much for content, but we can warn
         if (contentText == null) Debug.LogError("[AVAMP] Content Text (TMP) is missing!");
