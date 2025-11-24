@@ -28,6 +28,9 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     public int layoutMode = 0;
     [Tooltip("How many columns to use in Grid Mode")]
     public int gridColumns = 2;
+    [Tooltip("Horizontal spacing between columns (percentage, 25-40 recommended)")]
+    [Range(15, 50)]
+    public int gridColumnSpacing = 30;
     [Tooltip("How many names to show before making a new page")]
     public int namesPerPage = 20;
     [Tooltip("How many seconds to stay on a page before scrolling")]
@@ -250,6 +253,12 @@ public class AvampSupporterBoard : UdonSharpBehaviour
             backgroundOpacity = (float)settings["bg_opacity"].Number;
         }
 
+        // Update grid column spacing
+        if (settings.ContainsKey("grid_column_spacing"))
+        {
+            gridColumnSpacing = (int)settings["grid_column_spacing"].Number;
+        }
+
         // Re-apply visuals with updated settings
         ApplyVisuals();
 
@@ -347,10 +356,14 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         return text;
     }
 
-    // Create spacing between columns (simple approach)
-    private string GetColumnSeparator()
+    // Get horizontal position tag for a column (uses percentage of width)
+    private string GetColumnPosition(int columnIndex, int totalColumns)
     {
-        return "    "; // 4 spaces between columns
+        if (columnIndex == 0) return ""; // First column starts at natural position
+
+        // Use gridColumnSpacing to control distance between columns
+        float percentage = columnIndex * gridColumnSpacing;
+        return $"<pos={percentage:F0}%>";
     }
 
     private string GetColorFromToken(DataToken token)
@@ -507,15 +520,15 @@ public class AvampSupporterBoard : UdonSharpBehaviour
                 }
             }
 
-            // ROW 1: Tier headers (side by side)
+            // ROW 1: Tier headers (side by side) using <pos> tags for alignment
             string headerRow = "";
             for (int col = 0; col < actualColumns; col++)
             {
                 int tierIndex = startTier + col;
                 string tierName = TruncateText(_tierNames[tierIndex], gridColumnWidth);
 
-                if (col > 0) headerRow += GetColumnSeparator();
-                headerRow += $"<size=120%><b><color={tierColors[col]}>{tierName}</color></b></size>";
+                headerRow += GetColumnPosition(col, actualColumns);
+                headerRow += $"<b><color={tierColors[col]}>{tierName}</color></b>";
             }
             currentPageContent += headerRow + "\n";
             linesInCurrentPage++;
@@ -534,7 +547,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
                 string memberRow = "";
                 for (int col = 0; col < actualColumns; col++)
                 {
-                    if (col > 0) memberRow += GetColumnSeparator();
+                    memberRow += GetColumnPosition(col, actualColumns);
 
                     if (row < tierMembers[col].Count)
                     {
@@ -542,17 +555,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
                         string memberColor = GetColorFromToken(tierMembers[col][row]);
                         memberRow += $"<color={memberColor}>{memberName}</color>";
                     }
-                    else
-                    {
-                        // Empty cell - add placeholder spacing to maintain column positions
-                        // Create invisible text of gridColumnWidth characters
-                        string emptySpace = "";
-                        for (int i = 0; i < gridColumnWidth; i++)
-                        {
-                            emptySpace += " ";
-                        }
-                        memberRow += $"<alpha=#00>{emptySpace}</alpha>";
-                    }
+                    // No else needed - empty cells just skip to next column position
                 }
                 currentPageContent += memberRow + "\n";
                 linesInCurrentPage++;
@@ -606,10 +609,20 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     {
         if (!_hasData || _formattedPages == null || _formattedPages.Length == 0) return;
 
-        if (contentText != null) contentText.text = _formattedPages[_currentPage];
+        if (contentText != null)
+        {
+            // For grid mode, prepend <align=left> tag to force left alignment (required for <pos> tags)
+            // For list mode, don't add alignment tag (uses Unity Inspector setting)
+            string content = _formattedPages[_currentPage];
+            if (layoutMode == 1)
+            {
+                content = "<align=left>" + content;
+            }
+            contentText.text = content;
+        }
 
-        SetStatus(_totalPages > 1 
-            ? $"Page {_currentPage + 1} / {_totalPages}" 
+        SetStatus(_totalPages > 1
+            ? $"Page {_currentPage + 1} / {_totalPages}"
             : "Powered by AVAMP");
     }
 
@@ -636,7 +649,10 @@ public class AvampSupporterBoard : UdonSharpBehaviour
             headerText.color = headerColor;
             headerText.text = boardTitle;
         }
-        if (contentText != null) contentText.color = textColor;
+        if (contentText != null)
+        {
+            contentText.color = textColor;
+        }
         if (backgroundImage != null)
         {
             Color bg = backgroundImage.color;
