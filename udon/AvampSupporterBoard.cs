@@ -3,6 +3,7 @@ using UnityEngine;
 using VRC.SDKBase;
 using VRC.SDK3.StringLoading;
 using VRC.SDK3.Data;
+using VRC.Udon.Common.Interfaces; 
 using TMPro;
 using UnityEngine.UI;
 
@@ -35,40 +36,46 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     public TextMeshProUGUI contentText;
     [Tooltip("Small footer for status/page numbers")]
     public TextMeshProUGUI statusText;
-    [Tooltip("Header text component")]
+    [Tooltip("Header text component (Optional)")]
     public TextMeshProUGUI headerText;
-    [Tooltip("Background Image component")]
+    [Tooltip("Background Image component (Optional)")]
     public Image backgroundImage;
 
-    // --- Internal Optimization State ---
-    // We pre-format pages into strings so we don't generate garbage during Update/Scroll
+    // --- Internal State ---
     private string[] _formattedPages; 
     private int _totalPages = 0;
     private int _currentPage = 0;
-    
-    // Timers
     private float _timeSinceLastScroll = 0f;
     private float _timeSinceLastFetch = 0f;
-    
-    // State flags
     private bool _hasData = false;
     private bool _isLoading = false;
     private const float MIN_REFRESH_INTERVAL = 60f;
 
     void Start()
     {
-        // 1. Robust Initialization & Auto-Discovery
-        ValidateConfiguration();
-        ApplyVisuals();
-        
-        // 2. Initial Load
-        if (Utilities.IsValid(dataUrl) && !string.IsNullOrEmpty(dataUrl.Url))
+        // 1. DEBUG: Tell us exactly what the URL is seeing
+        if (dataUrl != null)
         {
-            LoadData();
+            Debug.Log($"[AVAMP] Start() - URL Object exists. String value: '{dataUrl.Get()}'");
         }
         else
         {
-            SetStatus("Configuration Error: No URL provided");
+            Debug.LogError("[AVAMP] Start() - URL Object is NULL!");
+        }
+
+        ValidateConfiguration();
+        ApplyVisuals();
+        
+        // 2. Validate URL before trying to load
+        string urlStr = dataUrl.Get();
+        if (!Utilities.IsValid(dataUrl) || string.IsNullOrEmpty(urlStr) || urlStr == "''")
+        {
+            Debug.LogError("[AVAMP] CONFIG ERROR: URL is empty or invalid.");
+            SetStatus("Config Error: Check URL");
+        }
+        else
+        {
+            LoadData();
         }
     }
 
@@ -76,7 +83,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     {
         if (!_hasData) return;
 
-        // Handle Auto-Scrolling
+        // Auto-Scroll Logic
         if (_totalPages > 1)
         {
             _timeSinceLastScroll += Time.deltaTime;
@@ -86,9 +93,8 @@ public class AvampSupporterBoard : UdonSharpBehaviour
             }
         }
 
-        // Handle Auto-Refresh (Polling)
+        // Auto-Refresh Logic
         _timeSinceLastFetch += Time.deltaTime;
-        // Clamp refresh interval to prevent API spam
         float safeInterval = Mathf.Max(refreshInterval, MIN_REFRESH_INTERVAL);
         
         if (_timeSinceLastFetch >= safeInterval && !_isLoading)
@@ -98,105 +104,72 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         }
     }
 
-    // Support manual interaction (clicking the board)
     public override void Interact()
     {
+        // Click to force update or change page
         if (_hasData && _totalPages > 1)
         {
             NextPage();
         }
         else if (!_hasData && !_isLoading)
         {
-            // specific interaction behavior if empty: try forcing a reload
             LoadData();
         }
     }
 
-    // --- Visuals ---
-    public void ApplyVisuals()
-    {
-        if (headerText != null)
-        {
-            headerText.color = headerColor;
-            // Only set title if we haven't loaded data yet (which appends count)
-            if (!_hasData) headerText.text = boardTitle;
-        }
-
-        if (contentText != null)
-        {
-            contentText.color = textColor;
-        }
-
-        if (backgroundImage != null)
-        {
-            Color bg = backgroundImage.color;
-            bg.a = backgroundOpacity;
-            backgroundImage.color = bg;
-        }
-    }
-
-    // --- Core Logic: Fetching ---
     public void LoadData()
     {
         if (_isLoading) return;
         
         _isLoading = true;
         SetStatus("Syncing...");
+        Debug.Log($"[AVAMP] Attempting download from: {dataUrl.Get()}");
         
-        // Udon's VRCStringDownloader is the bridge to the outside world
-        VRCStringDownloader.LoadUrl(dataUrl, (UdonBehaviour)this);
+        // Explicit Cast to IUdonEventReceiver
+        VRCStringDownloader.LoadUrl(dataUrl, (IUdonEventReceiver)this);
     }
 
-    // --- VRChat Events ---
+    // --- VRChat Event: Success ---
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
         _isLoading = false;
-        Debug.Log("[AVAMP] Data received successfully.");
+        Debug.Log("[AVAMP] Success! Data received.");
         ParseAndOptimizeData(result.Result);
     }
 
+    // --- VRChat Event: Error ---
     public override void OnStringLoadError(IVRCStringDownload result)
     {
         _isLoading = false;
-        Debug.LogError($"[AVAMP] Download Error: {result.Error}");
+        // FIX: Removed invalid 'ErrorMessage' property
+        Debug.LogError($"[AVAMP] Download FAILED. Error: {result.Error}");
         
-        // If we already have data shown, don't clear it. Just warn in logs/footer.
-        if (_hasData)
-        {
-            SetStatus($"Sync Failed (Retrying in {refreshInterval}s)");
-        }
-        else
-        {
-            SetStatus("Connection Failed. Click to Retry.");
-        }
+        if (_hasData) SetStatus($"Sync Failed (Retrying...)");
+        else SetStatus($"Connection Error: {result.Error}");
     }
 
-    // --- Core Logic: Parsing & Optimization ---
     private void ParseAndOptimizeData(string json)
     {
+        // Safety check for empty JSON
+        if (string.IsNullOrEmpty(json)) {
+             HandleParseError("Empty Response"); 
+             return; 
+        }
+
         if (!VRCJson.TryDeserializeFromJson(json, out DataToken data))
         {
-            HandleParseError("Invalid JSON");
+            HandleParseError("Invalid JSON Format");
             return;
         }
 
-        // Expected Structure: { "supporters": [ { "name": "X", "tier": "Y" }, ... ], "total_supporters": 100 }
         if (data.TokenType != TokenType.DataDictionary)
         {
-            HandleParseError("Root not Dictionary");
+            HandleParseError("Root is not a Dictionary { }");
             return;
         }
 
         DataDictionary root = data.DataDictionary;
         
-        // 1. Update Header Stats if available
-        if (headerText != null && root.ContainsKey("total_supporters"))
-        {
-            double count = root["total_supporters"].Number; // VRCJson numbers are doubles
-            headerText.text = $"{boardTitle} ({count})";
-        }
-
-        // 2. Parse Supporters List
         if (root.ContainsKey("supporters"))
         {
             DataList supporters = root["supporters"].DataList;
@@ -204,7 +177,7 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         }
         else
         {
-            HandleParseError("No 'supporters' key");
+            HandleParseError("Missing 'supporters' key in JSON");
         }
     }
 
@@ -213,23 +186,18 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         if (supporters.Count == 0)
         {
             SetStatus("No supporters yet!");
-            if (contentText != null) contentText.text = "";
+            if (contentText != null) contentText.text = "Be the first supporter!";
             return;
         }
 
-        // Calculate pages needed
         int count = supporters.Count;
         _totalPages = Mathf.CeilToInt((float)count / namesPerPage);
         _formattedPages = new string[_totalPages];
 
-        // Build pages efficiently
-        // We do this ONCE per fetch, so scrolling is zero-allocation later
         int currentSupporterIndex = 0;
 
         for (int pageIndex = 0; pageIndex < _totalPages; pageIndex++)
         {
-            // Udon doesn't have StringBuilder, so we use string concat.
-            // Since this happens only on load (every 5 mins), it's acceptable.
             string pageContent = "";
 
             for (int i = 0; i < namesPerPage; i++)
@@ -246,31 +214,33 @@ public class AvampSupporterBoard : UdonSharpBehaviour
             _formattedPages[pageIndex] = pageContent;
         }
 
-        // Success!
         _hasData = true;
         _currentPage = 0;
         UpdateDisplay();
+        Debug.Log($"[AVAMP] Processed {count} supporters into {_totalPages} pages.");
     }
 
     private string FormatSupporterEntry(DataToken token)
     {
-        // Handle both simple string array and object array
+        // Handle simple list ["Name", "Name"]
         if (token.TokenType == TokenType.String)
         {
             return token.String;
         }
+        // Handle complex list [{"name": "Name", "tier": "Gold"}]
         else if (token.TokenType == TokenType.DataDictionary)
         {
             DataDictionary dict = token.DataDictionary;
             string name = dict.ContainsKey("name") ? dict["name"].String : "Unknown";
             string tier = dict.ContainsKey("tier") ? dict["tier"].String : "";
             
-            // Use the format string
             if (!string.IsNullOrEmpty(tier))
             {
-                // Simplistic string.Format replacement for Udon
-                string formatted = entryFormat.Replace("{0}", name).Replace("{1}", tier);
-                return formatted;
+                string formatted = entryFormat;
+                // Simple manual replace for speed
+                string result = formatted.Replace("{0}", name);
+                result = result.Replace("{1}", tier);
+                return result;
             }
             else
             {
@@ -283,10 +253,9 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     private void HandleParseError(string reason)
     {
         Debug.LogError($"[AVAMP] Parse Error: {reason}");
-        if (!_hasData) SetStatus("Data Error");
+        if (!_hasData) SetStatus("Data Error (Check Console)");
     }
 
-    // --- Display Logic ---
     private void NextPage()
     {
         _timeSinceLastScroll = 0f;
@@ -299,13 +268,8 @@ public class AvampSupporterBoard : UdonSharpBehaviour
     {
         if (!_hasData || _formattedPages == null || _formattedPages.Length == 0) return;
 
-        // 1. Update Content
-        if (contentText != null)
-        {
-            contentText.text = _formattedPages[_currentPage];
-        }
+        if (contentText != null) contentText.text = _formattedPages[_currentPage];
 
-        // 2. Update Footer
         SetStatus(_totalPages > 1 
             ? $"Page {_currentPage + 1} / {_totalPages}" 
             : "Powered by AVAMP");
@@ -316,19 +280,30 @@ public class AvampSupporterBoard : UdonSharpBehaviour
         if (statusText != null) statusText.text = msg;
     }
 
-    // --- Helpers ---
     private void ValidateConfiguration()
     {
-        // Try to find components if not assigned (Quality of Life)
+        // Try to find components if they weren't dragged in
         if (contentText == null) contentText = GetComponentInChildren<TextMeshProUGUI>();
         if (headerText == null && transform.Find("Header") != null) headerText = transform.Find("Header").GetComponent<TextMeshProUGUI>();
         if (backgroundImage == null) backgroundImage = GetComponentInChildren<Image>();
         
-        // If still null, we can't do much for content, but we can warn
-        if (contentText == null) Debug.LogError("[AVAMP] Content Text (TMP) is missing!");
-        
-        // Ensure reasonable defaults
         if (namesPerPage < 1) namesPerPage = 20;
         if (pageDisplayTime < 1f) pageDisplayTime = 5f;
+    }
+
+    private void ApplyVisuals()
+    {
+        if (headerText != null)
+        {
+            headerText.color = headerColor;
+            headerText.text = boardTitle;
+        }
+        if (contentText != null) contentText.color = textColor;
+        if (backgroundImage != null)
+        {
+            Color bg = backgroundImage.color;
+            bg.a = backgroundOpacity;
+            backgroundImage.color = bg;
+        }
     }
 }
