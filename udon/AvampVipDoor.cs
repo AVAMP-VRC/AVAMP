@@ -9,50 +9,41 @@ using VRC.Udon.Common.Interfaces;
 public class AvampVipDoor : UdonSharpBehaviour
 {
     [Header("--- AVAMP Configuration ---")]
-    [Tooltip("The raw GitHub Pages URL to your vip.json")]
     public VRCUrl vipListUrl;
-    [Tooltip("How often to check for updates (in seconds). Minimum: 60s")]
     public float refreshInterval = 300f;
 
     [Header("--- Access Control ---")]
-    [Tooltip("Object to enable if user is allowed (e.g. the door, or a teleport button)")]
     public GameObject objectToEnable;
-    [Tooltip("Object to disable if user is allowed (e.g. a 'Locked' sign)")]
     public GameObject objectToDisable;
-    [Tooltip("Optional: Send this Custom Event to this behaviour when access is granted")]
-    public string onAccessGrantedEvent;
     
+    [Tooltip("If true, the door will close itself after X seconds")]
+    public bool useAutoClose = true;
+    [Tooltip("How long the door stays open")]
+    public float closeDelay = 5.0f;
+
     [Header("--- Debug ---")]
     public bool debugMode = false;
 
     // --- Internal State ---
-    private bool _isAllowed = false;
     private bool _isLoading = false;
     private float _timeSinceLastFetch = 0f;
     private const float MIN_REFRESH_INTERVAL = 60f;
 
     void Start()
     {
-        if (vipListUrl == null || string.IsNullOrEmpty(vipListUrl.Get()))
-        {
-            Log("URL is missing! VIP Door will not work.");
+        if (vipListUrl == null || string.IsNullOrEmpty(vipListUrl.Get())) {
+            Log("URL is missing!");
             return;
         }
-
-        // Initial state
-        UpdateAccessState(false);
-        
-        // Fetch data
+        // Ensure door is closed at start
+        ResetDoorState();
         LoadData();
     }
 
     void Update()
     {
-        // Auto-Refresh Logic
         _timeSinceLastFetch += Time.deltaTime;
-        float safeInterval = Mathf.Max(refreshInterval, MIN_REFRESH_INTERVAL);
-        
-        if (_timeSinceLastFetch >= safeInterval && !_isLoading)
+        if (_timeSinceLastFetch >= Mathf.Max(refreshInterval, MIN_REFRESH_INTERVAL) && !_isLoading)
         {
             _timeSinceLastFetch = 0f;
             LoadData();
@@ -61,107 +52,74 @@ public class AvampVipDoor : UdonSharpBehaviour
 
     public override void Interact()
     {
-        // Manual refresh on interact if not allowed yet
-        if (!_isAllowed && !_isLoading)
-        {
-            LoadData();
-        }
+        // When they click, we check the list immediately
+        if (!_isLoading) LoadData();
     }
 
     public void LoadData()
     {
         if (_isLoading) return;
-        
         _isLoading = true;
-        Log($"Syncing VIP list from: {vipListUrl.Get()}");
-        
         VRCStringDownloader.LoadUrl(vipListUrl, (IUdonEventReceiver)this);
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
         _isLoading = false;
-        Log("Data received successfully.");
         CheckAccess(result.Result);
     }
 
     public override void OnStringLoadError(IVRCStringDownload result)
     {
         _isLoading = false;
-        LogError($"Download FAILED. Error: {result.Error}");
+        LogError($"Download FAILED: {result.Error}");
     }
 
     private void CheckAccess(string json)
     {
-        if (string.IsNullOrEmpty(json)) return;
-
-        if (!VRCJson.TryDeserializeFromJson(json, out DataToken data))
-        {
-            LogError("Invalid JSON Format");
-            return;
-        }
-
-        if (data.TokenType != TokenType.DataDictionary)
-        {
-            LogError("Root is not a Dictionary { }");
+        if (!VRCJson.TryDeserializeFromJson(json, out DataToken data) || data.TokenType != TokenType.DataDictionary) {
+            LogError("Invalid JSON");
             return;
         }
 
         DataDictionary root = data.DataDictionary;
-
         if (root.ContainsKey("allowed_users"))
         {
             DataList allowedUsers = root["allowed_users"].DataList;
             string localName = Networking.LocalPlayer.displayName;
             bool found = false;
 
-            for (int i = 0; i < allowedUsers.Count; i++)
-            {
-                if (allowedUsers[i].String == localName)
-                {
-                    found = true;
-                    break;
-                }
+            for (int i = 0; i < allowedUsers.Count; i++) {
+                if (allowedUsers[i].String == localName) { found = true; break; }
             }
 
-            if (found)
-            {
-                Log($"Access GRANTED for {localName}");
-                UpdateAccessState(true);
-            }
-            else
-            {
-                Log($"Access DENIED for {localName}");
-                UpdateAccessState(false);
-            }
+            if (found) GrantAccess();
+            else Log("Access Denied");
         }
-        else
+    }
+
+    private void GrantAccess()
+    {
+        Log("Access Granted - Opening Door");
+        
+        // Open the door
+        if (objectToEnable != null) objectToEnable.SetActive(true);
+        if (objectToDisable != null) objectToDisable.SetActive(false);
+
+        // Start the timer to close it
+        if (useAutoClose)
         {
-            LogError("JSON missing 'allowed_users' key");
+            SendCustomEventDelayedSeconds(nameof(ResetDoorState), closeDelay);
         }
     }
 
-    private void UpdateAccessState(bool allowed)
+    public void ResetDoorState()
     {
-        _isAllowed = allowed;
-
-        if (objectToEnable != null) objectToEnable.SetActive(allowed);
-        if (objectToDisable != null) objectToDisable.SetActive(!allowed);
-
-        if (allowed && !string.IsNullOrEmpty(onAccessGrantedEvent))
-        {
-            SendCustomEvent(onAccessGrantedEvent);
-        }
+        // Close the door (Reset to default)
+        if (objectToEnable != null) objectToEnable.SetActive(false);
+        if (objectToDisable != null) objectToDisable.SetActive(true);
     }
 
-    private void Log(string msg)
-    {
-        if (debugMode) Debug.Log($"[AVAMP VIP] {msg}");
-    }
-
-    private void LogError(string msg)
-    {
-        Debug.LogError($"[AVAMP VIP] {msg}");
-    }
+    private void Log(string msg) { if (debugMode) Debug.Log($"[VIP] {msg}"); }
+    private void LogError(string msg) { Debug.LogError($"[VIP] {msg}"); }
 }
-
