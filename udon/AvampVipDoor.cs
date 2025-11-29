@@ -83,41 +83,19 @@ public class AvampVipDoor : UdonSharpBehaviour
         }
 
         DataDictionary root = data.DataDictionary;
-        VRCPlayerApi localPlayer = Networking.LocalPlayer;
-        string localPlayerId = localPlayer.playerId;
-        string localName = localPlayer.displayName;
-        bool found = false;
-
-        // Priority 1: Check VRChat User IDs (most reliable)
-        if (root.ContainsKey("allowed_vrc_ids"))
-        {
-            DataList allowedVrcIds = root["allowed_vrc_ids"].DataList;
-
-            for (int i = 0; i < allowedVrcIds.Count; i++) {
-                if (allowedVrcIds[i].String == localPlayerId) {
-                    found = true;
-                    Log("Access granted via VRChat ID");
-                    break;
-                }
-            }
-        }
-
-        // Priority 2: Fallback to display name check (for users without linked VRChat accounts)
-        if (!found && root.ContainsKey("allowed_users"))
+        if (root.ContainsKey("allowed_users"))
         {
             DataList allowedUsers = root["allowed_users"].DataList;
+            string localName = Networking.LocalPlayer.displayName;
+            bool found = false;
 
             for (int i = 0; i < allowedUsers.Count; i++) {
-                if (allowedUsers[i].String == localName) {
-                    found = true;
-                    Log("Access granted via display name");
-                    break;
-                }
+                if (allowedUsers[i].String == localName) { found = true; break; }
             }
-        }
 
-        if (found) GrantAccess();
-        else Log("Access Denied");
+            if (found) GrantAccess();
+            else Log("Access Denied");
+        }
     }
 
     private void GrantAccess()
