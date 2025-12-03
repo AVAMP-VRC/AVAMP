@@ -15,23 +15,28 @@ public class AvampVipDoor : UdonSharpBehaviour
     [Header("--- AVAMP Configuration ---")]
     public float refreshInterval = 300f;
 
-    [Header("--- Access Control ---")]
-    [Tooltip("The actual door object to hide/show")]
-    public GameObject objectToEnable;
-    public GameObject objectToDisable;
+    [Header("--- DOOR SETUP ---")]
+    [Tooltip("The Solid Door/Blocker. This object will DISAPPEAR when access is granted.")]
+    public GameObject lockedDoorObject;
+
+    [Tooltip("Optional: A Green Light or 'Open' sound. This object will APPEAR when access is granted.")]
+    public GameObject unlockVisuals;
+
+    [Tooltip("Optional: If set, VIPs will be teleported here immediately.")]
+    public Transform teleportTarget;
     
+    [Header("--- Timers ---")]
     public bool useAutoClose = true;
+    [Tooltip("How long (in seconds) the door stays open.")]
     public float closeDelay = 5.0f;
 
     [Header("--- Debug ---")]
-    [Tooltip("Check this to see names in the logs")]
     public bool debugMode = false;
 
     // --- Internal State ---
     private bool _isLoading = false;
     private float _timeSinceLastFetch = 0f;
     private const float MIN_REFRESH_INTERVAL = 60f;
-    
     private string _localPlayerName;
     private bool _isVipCached = false;
     private bool _triggeredByInteract = false;
@@ -43,7 +48,7 @@ public class AvampVipDoor : UdonSharpBehaviour
             _localPlayerName = Networking.LocalPlayer.displayName;
         }
 
-        // Close Door & Initial Load
+        // Ensure door is closed on load
         ResetDoorState();
         
         if (vipListUrls != null && vipListUrls.Length > 0)
@@ -52,7 +57,7 @@ public class AvampVipDoor : UdonSharpBehaviour
         }
         else
         {
-            LogError("No URLs found. Did you run the Generator?");
+            LogError("No URLs found.");
         }
     }
 
@@ -67,23 +72,19 @@ public class AvampVipDoor : UdonSharpBehaviour
         }
     }
 
+    // Called by the Relay Script on the buttons
     public override void Interact()
     {
-        // 1. If we are already VIP, open instantly.
         if (_isVipCached)
         {
-            OpenDoorSequence();
+            ExecuteAccessGranted();
             return;
         }
-
-        // 2. If not cached, or we want to force check, trigger load.
-        // If we are ALREADY loading (background refresh), we "upgrade" it to an interaction.
         LoadData(true);
     }
 
     public void LoadData(bool didInteract)
     {
-        // FIX: If loading, just ensure the flag is set so the door opens when done.
         if (_isLoading) 
         {
             if (didInteract) _triggeredByInteract = true;
@@ -100,7 +101,6 @@ public class AvampVipDoor : UdonSharpBehaviour
         if (!Utilities.IsValid(selectedUrl)) selectedUrl = vipListUrls[0];
 
         if (debugMode && didInteract) Log($"Checking Access...");
-        
         VRCStringDownloader.LoadUrl(selectedUrl, (IUdonEventReceiver)this);
     }
 
@@ -108,12 +108,11 @@ public class AvampVipDoor : UdonSharpBehaviour
     {
         _isLoading = false;
         
-        bool accessFound = CheckAccessInJSON(result.Result);
-        _isVipCached = accessFound;
+        _isVipCached = CheckAccessInJSON(result.Result);
 
         if (_triggeredByInteract)
         {
-            if (_isVipCached) OpenDoorSequence();
+            if (_isVipCached) ExecuteAccessGranted();
             else LogError($"Access Denied for '{_localPlayerName}'");
         }
         
@@ -125,8 +124,6 @@ public class AvampVipDoor : UdonSharpBehaviour
         _isLoading = false;
         _triggeredByInteract = false;
         if (debugMode) LogError($"Download FAILED: {result.Error}");
-        
-        // Retry logic
         SendCustomEventDelayedSeconds(nameof(RetryLoad), 10f);
     }
 
@@ -142,8 +139,6 @@ public class AvampVipDoor : UdonSharpBehaviour
         }
 
         DataDictionary root = data.DataDictionary;
-        
-        // Helper to check names case-insensitively
         string lowerLocalName = _localPlayerName.ToLower().Trim();
 
         // 1. Check 'allowed_users'
@@ -151,8 +146,7 @@ public class AvampVipDoor : UdonSharpBehaviour
         {
             DataList list = root["allowed_users"].DataList;
             for (int i = 0; i < list.Count; i++) {
-                string allowedName = list[i].String.ToLower().Trim();
-                if (allowedName == lowerLocalName) return true;
+                if (list[i].String.ToLower().Trim() == lowerLocalName) return true;
             }
         }
 
@@ -164,29 +158,36 @@ public class AvampVipDoor : UdonSharpBehaviour
                 if (list[i].TokenType == TokenType.DataDictionary) {
                     DataDictionary profile = list[i].DataDictionary;
                     if (profile.ContainsKey("name")) {
-                        string supporterName = profile["name"].String.ToLower().Trim();
-                        if (supporterName == lowerLocalName) return true;
+                        if (profile["name"].String.ToLower().Trim() == lowerLocalName) return true;
                     }
                 }
             }
         }
-
         return false;
     }
 
-    private void OpenDoorSequence()
+    private void ExecuteAccessGranted()
     {
-        Log("Access Granted - Opening.");
-        if (objectToEnable != null) objectToEnable.SetActive(true);
-        if (objectToDisable != null) objectToDisable.SetActive(false);
+        Log("Access Granted.");
+
+        // Visuals Logic: Hide the blocker, Show the green light
+        if (lockedDoorObject != null) lockedDoorObject.SetActive(false);
+        if (unlockVisuals != null) unlockVisuals.SetActive(true);
+
+        // Teleport Logic
+        if (teleportTarget != null)
+        {
+            Networking.LocalPlayer.TeleportTo(teleportTarget.position, teleportTarget.rotation);
+        }
 
         if (useAutoClose) SendCustomEventDelayedSeconds(nameof(ResetDoorState), closeDelay);
     }
 
     public void ResetDoorState()
     {
-        if (objectToEnable != null) objectToEnable.SetActive(false);
-        if (objectToDisable != null) objectToDisable.SetActive(true);
+        // Reset Visuals: Show the blocker, Hide the green light
+        if (lockedDoorObject != null) lockedDoorObject.SetActive(true);
+        if (unlockVisuals != null) unlockVisuals.SetActive(false);
     }
 
     private void Log(string msg) { if (debugMode) Debug.Log($"[VIP] {msg}"); }
